@@ -622,48 +622,46 @@ def get_usage_logs(
 
 
 def get_usage_summary(user_id: int) -> Dict[str, Any]:
-    with get_connection() as conn:
-        cursor = _execute(conn, "SELECT COUNT(*) as total FROM usage_logs WHERE user_id = ?", (user_id,))
-        total = cursor.fetchone()["total"]
+    """Resumen de uso. Compatible con SQLite y PostgreSQL."""
+    total = 0
+    by_tool = {}
+    last_7_days = {}
 
-        cursor = _execute(
-            conn,
-            """
-            SELECT tool, COUNT(*) as count
-            FROM usage_logs
-            WHERE user_id = ? AND tool IS NOT NULL
-            GROUP BY tool
-            ORDER BY count DESC
-            """,
-            (user_id,),
-        )
-        by_tool = {row["tool"]: row["count"] for row in cursor.fetchall()}
+    try:
+        with get_connection() as conn:
+            cursor = _execute(conn, "SELECT COUNT(*) as total FROM usage_logs WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            total = row["total"] if row else 0
 
-        if IS_POSTGRES:
             cursor = _execute(
                 conn,
                 """
-                SELECT DATE(created_at) as day, COUNT(*) as count
+                SELECT tool, COUNT(*) as count
                 FROM usage_logs
-                WHERE user_id = ? AND created_at >= (CURRENT_DATE - INTERVAL '7 days')
-                GROUP BY day
-                ORDER BY day
+                WHERE user_id = ? AND tool IS NOT NULL
+                GROUP BY tool
+                ORDER BY count DESC
                 """,
                 (user_id,),
             )
-        else:
+            by_tool = {row["tool"]: row["count"] for row in cursor.fetchall()}
+
+            # SUBSTR funciona igual en SQLite y PostgreSQL con texto ISO
             cursor = _execute(
                 conn,
                 """
-                SELECT DATE(created_at) as day, COUNT(*) as count
+                SELECT SUBSTR(created_at, 1, 10) as day, COUNT(*) as count
                 FROM usage_logs
-                WHERE user_id = ? AND created_at >= date('now', '-7 days')
+                WHERE user_id = ?
                 GROUP BY day
-                ORDER BY day
+                ORDER BY day DESC
+                LIMIT 7
                 """,
                 (user_id,),
             )
-        last_7_days = {str(row["day"]): row["count"] for row in cursor.fetchall()}
+            last_7_days = {str(row["day"]): row["count"] for row in cursor.fetchall()}
+    except Exception as e:
+        print(f"[get_usage_summary] error: {e}")
 
     return {
         "total_actions": total,
